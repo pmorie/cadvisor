@@ -18,6 +18,7 @@ package docker
 import (
 	"fmt"
 	"io/ioutil"
+	"math"
 	"path"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ import (
 	containerlibcontainer "github.com/google/cadvisor/container/libcontainer"
 	"github.com/google/cadvisor/fs"
 	info "github.com/google/cadvisor/info/v1"
+	"github.com/google/cadvisor/utils"
 
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
@@ -58,6 +60,8 @@ type dockerContainerHandler struct {
 	storageDriver    storageDriver
 	fsInfo           fs.FsInfo
 	rootfsStorageDir string
+	poolName         string
+	deviceID         string
 
 	// Time at which this container was created.
 	creationTime time.Time
@@ -82,6 +86,9 @@ type dockerContainerHandler struct {
 	fsHandler common.FsHandler
 
 	ignoreMetrics container.MetricSet
+
+	// thin pool watcher
+	thinPoolWatcher *volume.ThinPoolWatcher
 }
 
 func getRwLayerID(containerID, storageDir string, sd storageDriver, dockerVersion []int) (string, error) {
@@ -144,14 +151,32 @@ func newDockerContainerHandler(
 	if err != nil {
 		return nil, err
 	}
-	var rootfsStorageDir string
+
+	// Determine the rootfs storage dir OR the pool name to determine the device
+	var (
+		rootfsStorageDir string
+		poolName         string
+
+		thinPoolWatcher *volume.ThinPoolWatcher = nil
+	)
 	switch storageDriver {
 	case aufsStorageDriver:
 		rootfsStorageDir = path.Join(storageDir, string(aufsStorageDriver), aufsRWLayer, rwLayerID)
 	case overlayStorageDriver:
 		rootfsStorageDir = path.Join(storageDir, string(overlayStorageDriver), rwLayerID)
+	case devicemapperStorageDriver:
+		dockerInfo, err := DockerInfo()
+		if err != nil {
+			return nil, err
+		}
+
+		poolName, err = dockerutil.DockerThinPoolName(dockerInfo)
+		if err != nil {
+			return nil, err
+		}
 	}
 
+	// TODO: extract object mother method
 	handler := &dockerContainerHandler{
 		id:                 id,
 		client:             client,
@@ -162,13 +187,11 @@ func newDockerContainerHandler(
 		storageDriver:      storageDriver,
 		fsInfo:             fsInfo,
 		rootFs:             rootFs,
+		poolName:           poolName,
 		rootfsStorageDir:   rootfsStorageDir,
 		envs:               make(map[string]string),
 		ignoreMetrics:      ignoreMetrics,
-	}
-
-	if !ignoreMetrics.Has(container.DiskUsageMetrics) {
-		handler.fsHandler = common.NewFsHandler(time.Minute, rootfsStorageDir, otherStorageDir, fsInfo)
+		thinPoolWatcher:    thinPoolWatcher,
 	}
 
 	// We assume that if Inspect fails then the container is not known to docker.
@@ -184,6 +207,13 @@ func newDockerContainerHandler(
 	handler.labels = ctnr.Config.Labels
 	handler.image = ctnr.Config.Image
 	handler.networkMode = ctnr.HostConfig.NetworkMode
+	if ctnr.GraphDriver != nil {
+		handler.deviceID = ctnr.GraphDriver.Data["DeviceId"]
+	}
+
+	if !ignoreMetrics.Has(container.DiskUsageMetrics) {
+		handler.fsHandler = common.NewFsHandler(time.Minute, rootfsStorageDir, otherStorageDir, fsInfo, poolName, handler.deviceID)
+	}
 
 	// split env vars to get metadata map.
 	for _, exposedEnv := range metadataEnvs {
@@ -242,15 +272,20 @@ func (self *dockerContainerHandler) getFsStats(stats *info.ContainerStats) error
 	if self.ignoreMetrics.Has(container.DiskUsageMetrics) {
 		return nil
 	}
+	var device string
 	switch self.storageDriver {
+	case devicemapperStorageDriver:
+		// Device has to be the pool name to correlate with the device name as
+		// set in the machine info filesystems.
+		device = self.poolName
 	case aufsStorageDriver, overlayStorageDriver, zfsStorageDriver:
+		deviceInfo, err := self.fsInfo.GetDirFsDevice(self.rootfsStorageDir)
+		if err != nil {
+			return err
+		}
+		device = deviceInfo.Device
 	default:
 		return nil
-	}
-
-	deviceInfo, err := self.fsInfo.GetDirFsDevice(self.rootfsStorageDir)
-	if err != nil {
-		return err
 	}
 
 	mi, err := self.machineInfoFactory.GetMachineInfo()
@@ -265,14 +300,14 @@ func (self *dockerContainerHandler) getFsStats(stats *info.ContainerStats) error
 
 	// Docker does not impose any filesystem limits for containers. So use capacity as limit.
 	for _, fs := range mi.Filesystems {
-		if fs.Device == deviceInfo.Device {
+		if fs.Device == device {
 			limit = fs.Capacity
 			fsType = fs.Type
 			break
 		}
 	}
 
-	fsStat := info.FsStats{Device: deviceInfo.Device, Type: fsType, Limit: limit}
+	fsStat := info.FsStats{Device: device, Type: fsType, Limit: limit}
 
 	fsStat.BaseUsage, fsStat.Usage = self.fsHandler.Usage()
 	stats.Filesystem = append(stats.Filesystem, fsStat)

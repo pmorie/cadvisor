@@ -26,6 +26,7 @@ import (
 	"github.com/google/cadvisor/container/libcontainer"
 	"github.com/google/cadvisor/fs"
 	info "github.com/google/cadvisor/info/v1"
+	"github.com/google/cadvisor/volume"
 
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/glog"
@@ -94,7 +95,7 @@ func (self *dockerFactory) String() string {
 	return DockerNamespace
 }
 
-func (self *dockerFactory) NewContainerHandler(name string, inHostNamespace bool) (handler container.ContainerHandler, err error) {
+func (self *dockerFactory) NewContainerHandler(name string, inHostNamespace bool, thinPoolWatcher *volume.ThinPoolWatcher) (handler container.ContainerHandler, err error) {
 	client, err := Client()
 	if err != nil {
 		return
@@ -102,6 +103,7 @@ func (self *dockerFactory) NewContainerHandler(name string, inHostNamespace bool
 
 	metadataEnvs := strings.Split(*dockerEnvWhitelist, ",")
 
+	// TD
 	handler, err = newDockerContainerHandler(
 		client,
 		name,

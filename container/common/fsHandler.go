@@ -30,6 +30,7 @@ type FsHandler interface {
 	Stop()
 }
 
+// realFSHandler reads the usage of rootfs or deviceID and pool name
 type realFsHandler struct {
 	sync.RWMutex
 	lastUpdate     time.Time
@@ -39,6 +40,7 @@ type realFsHandler struct {
 	minPeriod      time.Duration
 	rootfs         string
 	extraDir       string
+	deviceID       string
 	fsInfo         fs.FsInfo
 	// Tells the container to stop.
 	stopChan chan struct{}
@@ -52,7 +54,7 @@ const (
 
 var _ FsHandler = &realFsHandler{}
 
-func NewFsHandler(period time.Duration, rootfs, extraDir string, fsInfo fs.FsInfo) FsHandler {
+func NewFsHandler(period time.Duration, rootfs, extraDir string, fsInfo fs.FsInfo, poolName, deviceID string) FsHandler {
 	return &realFsHandler{
 		lastUpdate:     time.Time{},
 		usageBytes:     0,
@@ -61,6 +63,7 @@ func NewFsHandler(period time.Duration, rootfs, extraDir string, fsInfo fs.FsInf
 		minPeriod:      period,
 		rootfs:         rootfs,
 		extraDir:       extraDir,
+		deviceID:       deviceID,
 		fsInfo:         fsInfo,
 		stopChan:       make(chan struct{}, 1),
 	}
@@ -72,14 +75,19 @@ func (fh *realFsHandler) update() error {
 		err                      error
 	)
 	// TODO(vishh): Add support for external mounts.
-	if fh.rootfs != "" {
+	if len(fh.rootfs) != 0 {
 		baseUsage, err = fh.fsInfo.GetDirUsage(fh.rootfs, duTimeout)
+		if err != nil {
+			return err
+		}
+	} else if len(fh.deviceID) != 0 {
+		baseUsage, err = fh.fsInfo.GetDMThinUsage(fh.deviceID)
 		if err != nil {
 			return err
 		}
 	}
 
-	if fh.extraDir != "" {
+	if len(fh.extraDir) != 0 {
 		extraDirUsage, err = fh.fsInfo.GetDirUsage(fh.extraDir, duTimeout)
 		if err != nil {
 			return err

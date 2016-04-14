@@ -23,6 +23,7 @@ import (
 	"github.com/google/cadvisor/container/libcontainer"
 	"github.com/google/cadvisor/fs"
 	info "github.com/google/cadvisor/info/v1"
+	"github.com/google/cadvisor/volume"
 
 	"github.com/golang/glog"
 )
@@ -50,7 +51,7 @@ func (self *rawFactory) String() string {
 	return "raw"
 }
 
-func (self *rawFactory) NewContainerHandler(name string, inHostNamespace bool) (container.ContainerHandler, error) {
+func (self *rawFactory) NewContainerHandler(name string, inHostNamespace bool, _ *volume.ThinPoolWatcher) (container.ContainerHandler, error) {
 	rootFs := "/"
 	if !inHostNamespace {
 		rootFs = "/rootfs"

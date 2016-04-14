@@ -80,4 +80,7 @@ type FsInfo interface {
 
 	// Returns the mountpoint associated with a particular device.
 	GetMountpointForDevice(device string) (string, error)
+
+	// Returns the number of bytes used exclusively for a devicemapper thin device.
+	GetDMThinUsage(deviceID string) (uint64, error)
 }

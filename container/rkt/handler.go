@@ -152,7 +152,7 @@ func newRktContainerHandler(name string, rktClient rktapi.PublicAPIClient, rktPa
 	}
 
 	if !ignoreMetrics.Has(container.DiskUsageMetrics) {
-		handler.fsHandler = common.NewFsHandler(time.Minute, rootfsStorageDir, "", fsInfo)
+		handler.fsHandler = common.NewFsHandler(time.Minute, rootfsStorageDir, "", fsInfo, "", "")
 	}
 
 	return handler, nil

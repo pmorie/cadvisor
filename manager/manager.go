@@ -36,8 +36,10 @@ import (
 	info "github.com/google/cadvisor/info/v1"
 	"github.com/google/cadvisor/info/v2"
 	"github.com/google/cadvisor/utils/cpuload"
+	dockerutil "github.com/google/cadvisor/utils/docker"
 	"github.com/google/cadvisor/utils/oomparser"
 	"github.com/google/cadvisor/utils/sysfs"
+	"github.com/google/cadvisor/volume"
 
 	"github.com/golang/glog"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
@@ -60,7 +62,7 @@ type Manager interface {
 	// Stops the manager.
 	Stop() error
 
-	//  information about a container.
+	// Get information about a container.
 	GetContainerInfo(containerName string, query *info.ContainerInfoRequest) (*info.ContainerInfo, error)
 
 	// Get V2 information about a container.
@@ -140,14 +142,24 @@ func New(memoryCache *memory.InMemoryCache, sysfs sysfs.SysFs, maxHousekeepingIn
 		glog.Warningf("unable to connect to Rkt api service: %v", err)
 	}
 
+	// TODO: handle case where we're not using device mapper as the storage driver
+	dockerThinPoolName, ok := dockerInfo.DriverStatus[dockerutil.DriverStatusPoolName]
+	if !ok {
+		return nil, fmt.Errorf("couldn't find pool name")
+	}
+	thinPoolWatcher := volume.NewThinPoolWatcher(dockerThinPoolName)
+	thinPoolWatcher.Start()
+
 	context := fs.Context{
 		Docker: fs.DockerContext{
 			Root:         docker.RootDir(),
 			Driver:       dockerInfo.Driver,
 			DriverStatus: dockerInfo.DriverStatus,
 		},
-		RktPath: rktPath,
+		RktPath:         rktPath,
+		ThinPoolWatcher: thinPoolWatcher,
 	}
+
 	fsInfo, err := fs.NewFsInfo(context)
 	if err != nil {
 		return nil, err
@@ -171,6 +183,7 @@ func New(memoryCache *memory.InMemoryCache, sysfs sysfs.SysFs, maxHousekeepingIn
 		maxHousekeepingInterval:  maxHousekeepingInterval,
 		allowDynamicHousekeeping: allowDynamicHousekeeping,
 		ignoreMetrics:            ignoreMetricsSet,
+		thinPoolWatcher:          thinPoolWatcher,
 	}
 
 	machineInfo, err := getMachineInfo(sysfs, fsInfo, inHostNamespace)
@@ -214,10 +227,12 @@ type manager struct {
 	maxHousekeepingInterval  time.Duration
 	allowDynamicHousekeeping bool
 	ignoreMetrics            container.MetricSet
+	thinPoolWatcher          *volume.ThinPoolWatcher
 }
 
 // Start the container manager.
 func (self *manager) Start() error {
+	// Register Docker container factory.
 	err := docker.Register(self, self.fsInfo, self.ignoreMetrics)
 	if err != nil {
 		glog.Errorf("Docker container factory registration failed: %v.", err)
@@ -777,7 +792,7 @@ func (m *manager) createContainer(containerName string) error {
 		return nil
 	}
 
-	handler, accept, err := container.NewContainerHandler(containerName, m.inHostNamespace)
+	handler, accept, err := container.NewContainerHandler(containerName, m.inHostNamespace, m.thinPoolWatcher)
 	if err != nil {
 		return err
 	}

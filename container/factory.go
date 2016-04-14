@@ -19,11 +19,12 @@ import (
 	"sync"
 
 	"github.com/golang/glog"
+	"github.com/google/cadvisor/volume"
 )
 
 type ContainerHandlerFactory interface {
 	// Create a new ContainerHandler using this factory. CanHandleAndAccept() must have returned true.
-	NewContainerHandler(name string, inHostNamespace bool) (c ContainerHandler, err error)
+	NewContainerHandler(name string, inHostNamespace bool, thinPoolWatcher *volume.ThinPoolWatcher) (c ContainerHandler, err error)
 
 	// Returns whether this factory can handle and accept the specified container.
 	CanHandleAndAccept(name string) (handle bool, accept bool, err error)
@@ -89,7 +90,7 @@ func HasFactories() bool {
 }
 
 // Create a new ContainerHandler for the specified container.
-func NewContainerHandler(name string, inHostNamespace bool) (ContainerHandler, bool, error) {
+func NewContainerHandler(name string, inHostNamespace bool, thinPoolWatcher *volume.ThinPoolWatcher) (ContainerHandler, bool, error) {
 	factoriesLock.RLock()
 	defer factoriesLock.RUnlock()
 
@@ -105,7 +106,7 @@ func NewContainerHandler(name string, inHostNamespace bool) (ContainerHandler, b
 				return nil, false, nil
 			}
 			glog.V(3).Infof("Using factory %q for container %q", factory, name)
-			handle, err := factory.NewContainerHandler(name, inHostNamespace)
+			handle, err := factory.NewContainerHandler(name, inHostNamespace, thinPoolWatcher)
 			return handle, canAccept, err
 		} else {
 			glog.V(4).Infof("Factory %q was unable to handle container %q", factory, name)
