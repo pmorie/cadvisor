@@ -33,6 +33,7 @@ import (
 
 	"github.com/docker/docker/pkg/mount"
 	"github.com/golang/glog"
+	dockerutil "github.com/google/cadvisor/utils/docker"
 	zfs "github.com/mistifyio/go-zfs"
 )
 
@@ -113,7 +114,12 @@ func NewFsInfo(context Context) (FsInfo, error) {
 		}
 	}
 
+	// need to call this before the log line below printing out the partitions, as this function may
+	// add a "partition" for devicemapper to fsInfo.partitions
+	fsInfo.addDockerImagesLabel(context, mounts)
+
 	glog.Infof("Filesystem partitions: %+v", fsInfo.partitions)
+	fsInfo.addSystemRootLabel(mounts)
 	return fsInfo, nil
 }
 
@@ -126,7 +132,7 @@ func (self *RealFsInfo) getDockerDeviceMapperInfo(context DockerContext) (string
 		return "", nil, nil
 	}
 
-	dataLoopFile := context.DriverStatus["Data loop file"]
+	dataLoopFile := context.DriverStatus[dockerutil.DriverStatusDataLoopFile]
 	if len(dataLoopFile) > 0 {
 		return "", nil, nil
 	}
@@ -452,7 +458,7 @@ func (*defaultDmsetupClient) table(poolName string) ([]byte, error) {
 // Devicemapper thin provisioning is detailed at
 // https://www.kernel.org/doc/Documentation/device-mapper/thin-provisioning.txt
 func dockerDMDevice(driverStatus map[string]string, dmsetup dmsetupClient) (string, uint, uint, uint, error) {
-	poolName, ok := driverStatus["Pool Name"]
+	poolName, ok := driverStatus[dockerutil.DriverStatusPoolName]
 	if !ok || len(poolName) == 0 {
 		return "", 0, 0, 0, fmt.Errorf("Could not get dm pool name")
 	}

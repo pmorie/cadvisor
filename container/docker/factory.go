@@ -26,6 +26,8 @@ import (
 	"github.com/google/cadvisor/container/libcontainer"
 	"github.com/google/cadvisor/fs"
 	info "github.com/google/cadvisor/info/v1"
+	dockerutil "github.com/google/cadvisor/utils/docker"
+	"github.com/google/cadvisor/volume"
 
 	docker "github.com/docker/engine-api/client"
 	"github.com/golang/glog"
@@ -89,6 +91,8 @@ type dockerFactory struct {
 	dockerVersion []int
 
 	ignoreMetrics container.MetricSet
+
+	thinPoolWatcher *volume.ThinPoolWatcher
 }
 
 func (self *dockerFactory) String() string {
@@ -103,6 +107,7 @@ func (self *dockerFactory) NewContainerHandler(name string, inHostNamespace bool
 
 	metadataEnvs := strings.Split(*dockerEnvWhitelist, ",")
 
+	// TD
 	handler, err = newDockerContainerHandler(
 		client,
 		name,
@@ -115,6 +120,7 @@ func (self *dockerFactory) NewContainerHandler(name string, inHostNamespace bool
 		metadataEnvs,
 		self.dockerVersion,
 		self.ignoreMetrics,
+		self.thinPoolWatcher,
 	)
 	return
 }
@@ -206,6 +212,24 @@ func Register(factory info.MachineInfoFactory, fsInfo fs.FsInfo, ignoreMetrics c
 		return fmt.Errorf("failed to get cgroup subsystems: %v", err)
 	}
 
+	var (
+		dockerStorageDriver                         = storageDriver(dockerInfo.Driver)
+		thinPoolWatcher     *volume.ThinPoolWatcher = nil
+	)
+
+	if dockerStorageDriver == devicemapperStorageDriver {
+		// If the storage drive is devicemapper, create and start a
+		// ThinPoolWatcher to monitor the size of container CoW layers with
+		// thin_ls.
+		dockerThinPoolName, err := dockerutil.DockerThinPoolName(*dockerInfo)
+		if err != nil {
+			return fmt.Errorf("couldn't find device mapper thin pool name: %v", err)
+		}
+
+		thinPoolWatcher = volume.NewThinPoolWatcher(dockerThinPoolName)
+		thinPoolWatcher.Start()
+	}
+
 	glog.Infof("Registering Docker factory")
 	f := &dockerFactory{
 		cgroupSubsystems:   cgroupSubsystems,
@@ -216,6 +240,7 @@ func Register(factory info.MachineInfoFactory, fsInfo fs.FsInfo, ignoreMetrics c
 		storageDriver:      storageDriver(dockerInfo.Driver),
 		storageDir:         storageDir,
 		ignoreMetrics:      ignoreMetrics,
+		thinPoolWatcher:    thinPoolWatcher,
 	}
 
 	container.RegisterContainerHandlerFactory(f)
