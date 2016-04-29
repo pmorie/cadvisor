@@ -11,6 +11,25 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-// Package volumes contains code for working with devicemapper
 package devicemapper
+
+import (
+	"os/exec"
+)
+
+// thinLsClient knows how to run a thin_ls very specific to CoW usage for containers.
+type thinLsClient interface {
+	ThinLs(deviceName string) ([]byte, error)
+}
+
+func newThinLsClient() thinLsClient {
+	return &defaultThinLsClient{}
+}
+
+type defaultThinLsClient struct{}
+
+var _ thinLsClient = &defaultThinLsClient{}
+
+func (*defaultThinLsClient) ThinLs(deviceName string) ([]byte, error) {
+	return exec.Command("thin_ls", "--no-headers", "-m", "-o", "DEV,EXCLUSIVE_BYTES", deviceName).Output()
+}

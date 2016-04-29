@@ -11,14 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package volume
+package devicemapper
 
 import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,11 +33,21 @@ type ThinPoolWatcher struct {
 	cache          map[string]uint64
 	period         time.Duration
 	stopChan       chan struct{}
+	dmsetupClient  DmsetupClient
+	thinLsClient   thinLsClient
 }
 
-// NewThinPoolWatcher returns a new ThinPoolWatcher for the given devicemapper thin pool name.
+// NewThinPoolWatcher returns a new ThinPoolWatcher for the given devicemapper thin pool name and metadata device.
 func NewThinPoolWatcher(poolName, metadataDevice string) *ThinPoolWatcher {
-	return &ThinPoolWatcher{poolName, &sync.RWMutex{}, make(map[string]uint64), make(chan struct{})}
+	return &ThinPoolWatcher{poolName: poolName,
+		metadataDevice: metadataDevice,
+		lock:           &sync.RWMutex{},
+		cache:          make(map[string]uint64),
+		period:         time.Second,
+		stopChan:       make(chan struct{}),
+		dmsetupClient:  NewDmsetupClient(),
+		thinLsClient:   newThinLsClient(),
+	}
 }
 
 func (w *ThinPoolWatcher) Start() {
@@ -49,8 +57,9 @@ func (w *ThinPoolWatcher) Start() {
 		case <-w.stopChan:
 			return
 		case <-time.After(w.period):
-			start := time.Now()
+			// start := time.Now()
 			w.Refresh()
+			// print latency for refresh
 		}
 	}
 }
@@ -74,7 +83,7 @@ func (w *ThinPoolWatcher) GetUsage(deviceId string) (uint64, error) {
 // Refresh performs a `thin_ls` of the pool being watched and refreshes the
 // cached data with the result.
 func (w *ThinPoolWatcher) Refresh() {
-	output, err := doThinLs(w.poolName, w.metadataDevice)
+	output, err := w.doThinLs(w.poolName, w.metadataDevice)
 	if err != nil {
 		glog.Errorf("unable to get usage for thin-pool %v: %v", w.poolName, err)
 		return
@@ -91,21 +100,21 @@ func (w *ThinPoolWatcher) Refresh() {
 // 1. Reserves a metadata snapshot for the pool
 // 2. Runs thin_ls against that snapshot
 // 3. Releases the snapshot
-func doThinLs(poolName, metadataDevice string) ([]byte, error) {
+func (w *ThinPoolWatcher) doThinLs(poolName, metadataDevice string) ([]byte, error) {
 	// (1)
 	// NOTE: "0" in the call below is for the 'sector' argument to 'dmsetup message'.  It's not needed for thin pools.
-	if _, err := exec.Command("dmsetup", "message", poolName, "0", "reserve_metadata_snap").Output(); err != nil {
-		return nil, fmt.Errorf("%v, %v", os.Stderr, err)
+	if output, err := w.dmsetupClient.Message(poolName, 0, "reserve_metadata_snap"); err != nil {
+		return nil, fmt.Errorf("%v, %v", string(output), err)
 	}
 	// (3)
 	defer func() {
-		exec.Command("dmsetup", "message", poolName, "0", "release_metadata_snap").Run()
+		w.dmsetupClient.Message(poolName, 0, "release_metadata_snap")
 	}()
 
 	// (2)
-	output, err := exec.Command("thin_ls", "--no-headers", "-m", "-o", "DEV,EXCLUSIVE_BYTES", metadataDevice).Output()
+	output, err := w.thinLsClient.ThinLs(metadataDevice)
 	if err != nil {
-		return nil, fmt.Errorf("%v, %v", os.Stderr, err)
+		return nil, fmt.Errorf("error performing thin_ls: %v; output: %q", err, string(output))
 	}
 
 	return output, nil

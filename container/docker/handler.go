@@ -25,10 +25,10 @@ import (
 	"github.com/google/cadvisor/container"
 	"github.com/google/cadvisor/container/common"
 	containerlibcontainer "github.com/google/cadvisor/container/libcontainer"
+	"github.com/google/cadvisor/devicemapper"
 	"github.com/google/cadvisor/fs"
 	info "github.com/google/cadvisor/info/v1"
 	dockerutil "github.com/google/cadvisor/utils/docker"
-	"github.com/google/cadvisor/volume"
 
 	docker "github.com/docker/engine-api/client"
 	dockertypes "github.com/docker/engine-api/types"
@@ -60,6 +60,7 @@ type dockerContainerHandler struct {
 	// Manager of this container's cgroups.
 	cgroupManager cgroups.Manager
 
+	// the docker storage driver
 	storageDriver    storageDriver
 	fsInfo           fs.FsInfo
 	rootfsStorageDir string
@@ -91,7 +92,7 @@ type dockerContainerHandler struct {
 	ignoreMetrics container.MetricSet
 
 	// thin pool watcher
-	thinPoolWatcher *volume.ThinPoolWatcher
+	thinPoolWatcher *devicemapper.ThinPoolWatcher
 }
 
 var _ container.ContainerHandler = &dockerContainerHandler{}
@@ -125,7 +126,7 @@ func newDockerContainerHandler(
 	metadataEnvs []string,
 	dockerVersion []int,
 	ignoreMetrics container.MetricSet,
-	thinPoolWatcher *volume.ThinPoolWatcher,
+	thinPoolWatcher *devicemapper.ThinPoolWatcher,
 ) (container.ContainerHandler, error) {
 	// Create the cgroup paths.
 	cgroupPaths := make(map[string]string, len(cgroupSubsystems.MountPoints))
@@ -216,9 +217,7 @@ func newDockerContainerHandler(
 	handler.labels = ctnr.Config.Labels
 	handler.image = ctnr.Config.Image
 	handler.networkMode = ctnr.HostConfig.NetworkMode
-	if ctnr.GraphDriver != nil {
-		handler.deviceID = ctnr.GraphDriver.Data["DeviceId"]
-	}
+	handler.deviceID = ctnr.GraphDriver.Data["DeviceId"]
 
 	if !ignoreMetrics.Has(container.DiskUsageMetrics) {
 		handler.fsHandler = &dockerFsHandler{
@@ -246,7 +245,7 @@ type dockerFsHandler struct {
 
 	// devicemapper dependencies
 
-	thinPoolWatcher *volume.ThinPoolWatcher
+	thinPoolWatcher *devicemapper.ThinPoolWatcher
 	deviceID        string
 }
 

@@ -24,10 +24,10 @@ import (
 
 	"github.com/google/cadvisor/container"
 	"github.com/google/cadvisor/container/libcontainer"
+	"github.com/google/cadvisor/devicemapper"
 	"github.com/google/cadvisor/fs"
 	info "github.com/google/cadvisor/info/v1"
 	dockerutil "github.com/google/cadvisor/utils/docker"
-	"github.com/google/cadvisor/volume"
 
 	docker "github.com/docker/engine-api/client"
 	"github.com/golang/glog"
@@ -91,7 +91,7 @@ type dockerFactory struct {
 
 	ignoreMetrics container.MetricSet
 
-	thinPoolWatcher *volume.ThinPoolWatcher
+	thinPoolWatcher *devicemapper.ThinPoolWatcher
 }
 
 func (self *dockerFactory) String() string {
@@ -211,8 +211,8 @@ func Register(factory info.MachineInfoFactory, fsInfo fs.FsInfo, ignoreMetrics c
 	}
 
 	var (
-		dockerStorageDriver                         = storageDriver(dockerInfo.Driver)
-		thinPoolWatcher     *volume.ThinPoolWatcher = nil
+		dockerStorageDriver                               = storageDriver(dockerInfo.Driver)
+		thinPoolWatcher     *devicemapper.ThinPoolWatcher = nil
 	)
 
 	if dockerStorageDriver == devicemapperStorageDriver {
@@ -224,16 +224,16 @@ func Register(factory info.MachineInfoFactory, fsInfo fs.FsInfo, ignoreMetrics c
 			return fmt.Errorf("couldn't find device mapper thin pool name: %v", err)
 		}
 
-		dockerMetadataDevice, err := dockerutil.dockerMetadataDevice(*dockerInfo)
+		dockerMetadataDevice, err := dockerutil.DockerMetadataDevice(*dockerInfo)
 		if err != nil {
 			return fmt.Errorf("couldn't determine devicemapper metadata device")
 		}
 
-		thinPoolWatcher = volume.NewThinPoolWatcher(dockerThinPoolName, dockerMetadataDevice)
+		thinPoolWatcher = devicemapper.NewThinPoolWatcher(dockerThinPoolName, dockerMetadataDevice)
 		thinPoolWatcher.Start()
 	}
 
-	glog.Infof("Registering Docker factory")
+	glog.Infof("registering Docker factory")
 	f := &dockerFactory{
 		cgroupSubsystems:   cgroupSubsystems,
 		client:             client,

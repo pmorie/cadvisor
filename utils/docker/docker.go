@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	docker "github.com/docker/engine-api/client"
-	dockertypes "github.com/docker/engine-api/client"
+	dockertypes "github.com/docker/engine-api/types"
 )
 
 const (
