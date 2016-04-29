@@ -67,7 +67,6 @@ func RootDir() string {
 type storageDriver string
 
 const (
-	// TODO: Add support for devicemapper storage usage.
 	devicemapperStorageDriver storageDriver = "devicemapper"
 	aufsStorageDriver         storageDriver = "aufs"
 	overlayStorageDriver      storageDriver = "overlay"
@@ -107,7 +106,6 @@ func (self *dockerFactory) NewContainerHandler(name string, inHostNamespace bool
 
 	metadataEnvs := strings.Split(*dockerEnvWhitelist, ",")
 
-	// TD
 	handler, err = newDockerContainerHandler(
 		client,
 		name,
@@ -226,7 +224,12 @@ func Register(factory info.MachineInfoFactory, fsInfo fs.FsInfo, ignoreMetrics c
 			return fmt.Errorf("couldn't find device mapper thin pool name: %v", err)
 		}
 
-		thinPoolWatcher = volume.NewThinPoolWatcher(dockerThinPoolName)
+		dockerMetadataDevice, err := dockerutil.dockerMetadataDevice(*dockerInfo)
+		if err != nil {
+			return fmt.Errorf("couldn't determine devicemapper metadata device")
+		}
+
+		thinPoolWatcher = volume.NewThinPoolWatcher(dockerThinPoolName, dockerMetadataDevice)
 		thinPoolWatcher.Start()
 	}
 

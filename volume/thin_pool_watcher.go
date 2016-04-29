@@ -29,24 +29,34 @@ import (
 
 // ThinPoolWatcher maintains a cache of device name -> usage stats for a devicemapper thin-pool using thin_ls.
 type ThinPoolWatcher struct {
-	poolName string
-	lock     *sync.RWMutex
-	cache    map[string]uint64
+	poolName       string
+	metadataDevice string
+	lock           *sync.RWMutex
+	cache          map[string]uint64
+	period         time.Duration
+	stopChan       chan struct{}
 }
 
 // NewThinPoolWatcher returns a new ThinPoolWatcher for the given devicemapper thin pool name.
-func NewThinPoolWatcher(poolName string) *ThinPoolWatcher {
-	return &ThinPoolWatcher{poolName, &sync.RWMutex{}, make(map[string]uint64)}
+func NewThinPoolWatcher(poolName, metadataDevice string) *ThinPoolWatcher {
+	return &ThinPoolWatcher{poolName, &sync.RWMutex{}, make(map[string]uint64), make(chan struct{})}
 }
 
 func (w *ThinPoolWatcher) Start() {
-	// NOTE: placeholder code, I intend to find a way to reuse kube wait.Forever here
+	w.Refresh()
 	for {
 		select {
-		case <-time.After(0):
+		case <-w.stopChan:
+			return
+		case <-time.After(w.period):
+			start := time.Now()
 			w.Refresh()
 		}
 	}
+}
+
+func (w *ThinPoolWatcher) Stop() {
+	close(w.stopChan)
 }
 
 // GetUsage gets the cached usage value of the given device.
@@ -55,7 +65,7 @@ func (w *ThinPoolWatcher) GetUsage(deviceId string) (uint64, error) {
 	defer w.lock.RUnlock()
 	v, ok := w.cache[deviceId]
 	if !ok {
-		return 0, fmt.Errorf("No cached value for usage of device %v", deviceId)
+		return 0, fmt.Errorf("no cached value for usage of device %v", deviceId)
 	}
 
 	return v, nil
@@ -64,9 +74,9 @@ func (w *ThinPoolWatcher) GetUsage(deviceId string) (uint64, error) {
 // Refresh performs a `thin_ls` of the pool being watched and refreshes the
 // cached data with the result.
 func (w *ThinPoolWatcher) Refresh() {
-	output, err := doThinLs(w.poolName)
+	output, err := doThinLs(w.poolName, w.metadataDevice)
 	if err != nil {
-		glog.Errorf("Unable to get thin-pool usage for pool %v: %v", w.poolName, err)
+		glog.Errorf("unable to get usage for thin-pool %v: %v", w.poolName, err)
 		return
 	}
 
@@ -81,7 +91,7 @@ func (w *ThinPoolWatcher) Refresh() {
 // 1. Reserves a metadata snapshot for the pool
 // 2. Runs thin_ls against that snapshot
 // 3. Releases the snapshot
-func doThinLs(poolName string) ([]byte, error) {
+func doThinLs(poolName, metadataDevice string) ([]byte, error) {
 	// (1)
 	// NOTE: "0" in the call below is for the 'sector' argument to 'dmsetup message'.  It's not needed for thin pools.
 	if _, err := exec.Command("dmsetup", "message", poolName, "0", "reserve_metadata_snap").Output(); err != nil {
@@ -93,8 +103,7 @@ func doThinLs(poolName string) ([]byte, error) {
 	}()
 
 	// (2)
-	poolMetaDev := fmt.Sprintf("/dev/mapper/%s_tmeta", poolName)
-	output, err := exec.Command("thin_ls", "--no-headers", "-m", "-o", "DEV,EXCLUSIVE_BYTES", poolMetaDev).Output()
+	output, err := exec.Command("thin_ls", "--no-headers", "-m", "-o", "DEV,EXCLUSIVE_BYTES", metadataDevice).Output()
 	if err != nil {
 		return nil, fmt.Errorf("%v, %v", os.Stderr, err)
 	}

@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fsouza/go-dockerclient"
+	docker "github.com/docker/engine-api/client"
+	dockertypes "github.com/docker/engine-api/client"
 )
 
 const (
@@ -12,6 +13,7 @@ const (
 	DockerInfoDriverStatus   = "DriverStatus"
 	DriverStatusPoolName     = "Pool Name"
 	DriverStatusDataLoopFile = "Data loop file"
+	DriverStatusMetadataFile = "Metadata file"
 )
 
 func DriverStatusValue(status [][2]string, target string) string {
@@ -23,11 +25,20 @@ func DriverStatusValue(status [][2]string, target string) string {
 	return ""
 }
 
-func DockerThinPoolName(dockerInfo docker.DockerInfo) (string, error) {
-	poolName := DriverStatusValue(dockerInfo.DriverStatus, DriverStatusPoolName)
+func DockerThinPoolName(info dockertypes.Info) (string, error) {
+	poolName := DriverStatusValue(info.DriverStatus, DriverStatusPoolName)
 	if len(poolName) == 0 {
 		return "", fmt.Errorf("Could not get devicemapper pool name")
 	}
 
 	return poolName, nil
+}
+
+func DockerMetadataDevice(info dockertypes.Info) (string, error) {
+	metadataDevice := DriverStatusValue(info.DriverStatus, DriverStatusMetadataFile)
+	if len(metadataDevice) == 0 {
+		return "", fmt.Errorf("Could not get the devicemapper metadata device")
+	}
+
+	return metadataDevice, nil
 }
