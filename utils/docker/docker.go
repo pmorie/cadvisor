@@ -11,7 +11,7 @@ const (
 	DockerInfoDriver         = "Driver"
 	DockerInfoDriverStatus   = "DriverStatus"
 	DriverStatusPoolName     = "Pool Name"
-	DriverStatusDataLoopFile = "Data loop file"
+	DriverStatusDataLoopFile = "Data file"
 	DriverStatusMetadataFile = "Metadata file"
 )
 

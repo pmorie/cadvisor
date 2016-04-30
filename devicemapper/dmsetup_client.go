@@ -16,9 +16,13 @@ package devicemapper
 import (
 	"os/exec"
 	"strconv"
+	"strings"
+
+	"github.com/golang/glog"
 )
 
-// DmsetupClient is a low-level client for interacting with devicemapper
+// DmsetupClient is a low-level client for interacting with devicemapper via
+// the dmsetup utility.
 type DmsetupClient interface {
 	Table(deviceName string) ([]byte, error)
 	Message(deviceName string, sector int, message string) ([]byte, error)
@@ -34,14 +38,19 @@ type defaultDmsetupClient struct{}
 
 var _ DmsetupClient = &defaultDmsetupClient{}
 
-func (*defaultDmsetupClient) Table(deviceName string) ([]byte, error) {
-	return exec.Command("dmsetup", "table", deviceName).Output()
+func (c *defaultDmsetupClient) Table(deviceName string) ([]byte, error) {
+	return c.dmsetup("table", deviceName)
 }
 
-func (*defaultDmsetupClient) Message(deviceName string, sector int, message string) ([]byte, error) {
-	return exec.Command("dmsetup", "message", deviceName, strconv.Itoa(sector), message).Output()
+func (c *defaultDmsetupClient) Message(deviceName string, sector int, message string) ([]byte, error) {
+	return c.dmsetup("message", deviceName, strconv.Itoa(sector), message)
 }
 
-func (*defaultDmsetupClient) Status(deviceName string) ([]byte, error) {
-	return exec.Command("dmsetup", "status", deviceName).Output()
+func (c *defaultDmsetupClient) Status(deviceName string) ([]byte, error) {
+	return c.dmsetup("status", deviceName)
+}
+
+func (*defaultDmsetupClient) dmsetup(args ...string) ([]byte, error) {
+	glog.V(5).Infof("running dmsetup %v", strings.Join(args, " "))
+	return exec.Command("dmsetup", args...).Output()
 }

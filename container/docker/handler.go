@@ -64,8 +64,13 @@ type dockerContainerHandler struct {
 	storageDriver    storageDriver
 	fsInfo           fs.FsInfo
 	rootfsStorageDir string
-	poolName         string
-	deviceID         string
+
+	// devicemapper state
+
+	// the devicemapper poolname
+	poolName string
+	// the devicemapper device id for the container
+	deviceID string
 
 	// Time at which this container was created.
 	creationTime time.Time
@@ -114,6 +119,7 @@ func getRwLayerID(containerID, storageDir string, sd storageDriver, dockerVersio
 	return string(bytes), err
 }
 
+// newDockerContainerHandler returns a new container.ContainerHandler
 func newDockerContainerHandler(
 	client *docker.Client,
 	name string,
@@ -240,13 +246,15 @@ func newDockerContainerHandler(
 	return handler, nil
 }
 
+// dockerFsHandler is a composite FsHandler implementation the incorporates
+// the common fs handler and a devicemapper ThinPoolWatcher.
 type dockerFsHandler struct {
 	fsHandler common.FsHandler
 
-	// devicemapper dependencies
-
+	// thinPoolWatcher is the devicemapper thin pool watcher
 	thinPoolWatcher *devicemapper.ThinPoolWatcher
-	deviceID        string
+	// deviceID is the id of the container's fs device
+	deviceID string
 }
 
 var _ common.FsHandler = &dockerFsHandler{}

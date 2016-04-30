@@ -230,7 +230,7 @@ func Register(factory info.MachineInfoFactory, fsInfo fs.FsInfo, ignoreMetrics c
 		}
 
 		thinPoolWatcher = devicemapper.NewThinPoolWatcher(dockerThinPoolName, dockerMetadataDevice)
-		thinPoolWatcher.Start()
+		go thinPoolWatcher.Start()
 	}
 
 	glog.Infof("registering Docker factory")

@@ -14,15 +14,17 @@
 package devicemapper
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/golang/glog"
+)
+
+const (
+	reserveMetadataMessage = "reserve_metadata_snap"
+	releaseMetadataMessage = "release_metadata_snap"
 )
 
 // ThinPoolWatcher maintains a cache of device name -> usage stats for a devicemapper thin-pool using thin_ls.
@@ -33,7 +35,7 @@ type ThinPoolWatcher struct {
 	cache          map[string]uint64
 	period         time.Duration
 	stopChan       chan struct{}
-	dmsetupClient  DmsetupClient
+	dmsetup        DmsetupClient
 	thinLsClient   thinLsClient
 }
 
@@ -43,13 +45,14 @@ func NewThinPoolWatcher(poolName, metadataDevice string) *ThinPoolWatcher {
 		metadataDevice: metadataDevice,
 		lock:           &sync.RWMutex{},
 		cache:          make(map[string]uint64),
-		period:         time.Second,
+		period:         15 * time.Second,
 		stopChan:       make(chan struct{}),
-		dmsetupClient:  NewDmsetupClient(),
+		dmsetup:        NewDmsetupClient(),
 		thinLsClient:   newThinLsClient(),
 	}
 }
 
+// Start starts the thin pool watcher.
 func (w *ThinPoolWatcher) Start() {
 	w.Refresh()
 	for {
@@ -80,63 +83,77 @@ func (w *ThinPoolWatcher) GetUsage(deviceId string) (uint64, error) {
 	return v, nil
 }
 
+const (
+	thinPoolDmsetupStatusTokens           = 11
+	thinPoolDmsetupStatusHeldMetadataRoot = 6
+)
+
 // Refresh performs a `thin_ls` of the pool being watched and refreshes the
 // cached data with the result.
 func (w *ThinPoolWatcher) Refresh() {
-	output, err := w.doThinLs(w.poolName, w.metadataDevice)
-	if err != nil {
-		glog.Errorf("unable to get usage for thin-pool %v: %v", w.poolName, err)
-		return
-	}
-
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
-	w.cache = parseThinLsOutput(output)
+	newCache, err := w.doThinLs(w.poolName, w.metadataDevice)
+	if err != nil {
+		glog.Errorf("unable to get usage for thin-pool %v: '%v'", w.poolName, err)
+		return
+	}
+
+	w.cache = newCache
 }
 
 // doThinLs handles obtaining the output of thin_ls for the given pool name; it:
-//
-// 1. Reserves a metadata snapshot for the pool
-// 2. Runs thin_ls against that snapshot
-// 3. Releases the snapshot
-func (w *ThinPoolWatcher) doThinLs(poolName, metadataDevice string) ([]byte, error) {
-	// (1)
-	// NOTE: "0" in the call below is for the 'sector' argument to 'dmsetup message'.  It's not needed for thin pools.
-	if output, err := w.dmsetupClient.Message(poolName, 0, "reserve_metadata_snap"); err != nil {
-		return nil, fmt.Errorf("%v, %v", string(output), err)
+func (w *ThinPoolWatcher) doThinLs(poolName, metadataDevice string) (map[string]uint64, error) {
+	currentlyReserved, err := w.checkReservation(poolName)
+	if err != nil {
+		glog.Errorf("error determining whether snapshot is reserved: %v", err)
 	}
-	// (3)
+
+	if currentlyReserved {
+		glog.V(4).Infof("metadata for %v is currently reserved; releasing", w.poolName)
+		_, err = w.dmsetup.Message(w.poolName, 0, releaseMetadataMessage)
+		if err != nil {
+			glog.Errorf("error releasing metadata snapshot for %v: %v", w.poolName, err)
+		}
+	}
+
+	glog.Infof("reserving metadata snapshot for thin-pool %v", poolName)
+	// NOTE: "0" in the call below is for the 'sector' argument to 'dmsetup message'.  It's not needed for thin pools.
+	if output, err := w.dmsetup.Message(poolName, 0, reserveMetadataMessage); err != nil {
+		return nil, fmt.Errorf("error reserving metadata for thin-pool %v: %v output: %v", poolName, err, string(output))
+	} else {
+		glog.V(5).Infof("reserved metadata snapshot for thin-pool %v", poolName)
+	}
 	defer func() {
-		w.dmsetupClient.Message(poolName, 0, "release_metadata_snap")
+		glog.V(5).Infof("releasing metadata snapshot for thin-pool %v", poolName)
+		w.dmsetup.Message(poolName, 0, releaseMetadataMessage)
 	}()
 
-	// (2)
-	output, err := w.thinLsClient.ThinLs(metadataDevice)
+	glog.V(5).Infof("running thin_ls on metadata device %v", metadataDevice)
+	result, err := w.thinLsClient.ThinLs(metadataDevice)
 	if err != nil {
-		return nil, fmt.Errorf("error performing thin_ls: %v; output: %q", err, string(output))
+		return nil, fmt.Errorf("error performing thin_ls on metadata device %v: %v", metadataDevice, err)
 	}
 
-	return output, nil
+	return result, nil
 }
 
-// parseThinLsOutput parses the output returned by thin_ls to build a map of device id -> usage.
-func parseThinLsOutput(output []byte) map[string]uint64 {
-	cache := map[string]uint64{}
-
-	// parse output
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		output := scanner.Text()
-		deviceID := strings.Fields(output)[0]
-		usage, err := strconv.ParseUint(strings.Fields(output)[1], 10, 64)
-		if err != nil {
-			// parse error, log and continue
-			continue
-		}
-
-		cache[deviceID] = usage
+// checkReservation checks to see whether the thin device is currently holding userspace metadata.
+func (w *ThinPoolWatcher) checkReservation(poolName string) (bool, error) {
+	glog.V(5).Infof("checking whether the thin-pool is holding a metadata snapshot")
+	output, err := w.dmsetup.Status(poolName)
+	if err != nil {
+		return false, err
 	}
 
-	return cache
+	tokens := strings.Split(string(output), " ")
+	// Split returns the input as the last item in the result, adjust the number of tokens by one
+	if len(tokens) != thinPoolDmsetupStatusTokens+1 {
+		return false, fmt.Errorf("unexpected output of dmsetup status command; expected 11 fields, got %v; output: ", len(tokens), string(output))
+	}
+
+	heldMetadataRoot := tokens[thinPoolDmsetupStatusHeldMetadataRoot]
+	currentlyReserved := heldMetadataRoot != "-"
+	return currentlyReserved, nil
 }
